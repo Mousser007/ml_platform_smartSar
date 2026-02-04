@@ -24,7 +24,7 @@ pipeline {
             steps {
                 sh '''
                 . venv/bin/activate
-                python scraping/tayara_scraper.py
+                python Ingestion/TayaraScrapper.py
                 '''
             }
         }
