@@ -1,0 +1,7 @@
+selenium>=4.15.0
+beautifulsoup4>=4.12.2
+pandas>=2.1.1
+SQLAlchemy>=2.0.22
+webdriver-manager>=4.2.2
+lxml>=4.9.3
+requests>=2.32.0
