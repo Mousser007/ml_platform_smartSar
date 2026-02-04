@@ -7,10 +7,15 @@ from sqlalchemy.ext.declarative import declarative_base
 
 
 def config(filename="database.ini", section="postgresql"):
-    # create a parser
+    from configparser import ConfigParser
+    import os
+
+    # Make filename absolute relative to this file
+    filename = os.path.join(os.path.dirname(__file__), filename)
+
     parser = ConfigParser()
-    # read config file
     parser.read(filename)
+
     db = {}
     if parser.has_section(section):
         params = parser.items(section)
@@ -18,7 +23,8 @@ def config(filename="database.ini", section="postgresql"):
             db[param[0]] = param[1]
     else:
         raise Exception(
-            'Section {0} is not found in the {1} file.'.format(section, filename))
+            f'Section {section} is not found in the {filename} file.'
+        )
     return db
 
 
