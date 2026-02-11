@@ -10,7 +10,7 @@ import pandas as pd
 import os
 from Cleaning.Cleaner import *
 from Config import *
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String,ForeignKey
 from sqlalchemy.orm import sessionmaker
 from urllib.parse import urljoin
 import re
@@ -18,27 +18,33 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+from sqlalchemy.orm import relationship
 
 class TayaraPostScrapping(Base):
     __tablename__ = 'TayaraPostScrapping'
     id = Column(Integer, primary_key=True)
-    Annee = Column(String)
-    BoiteVitesse = Column(String)
-    Kilometrage = Column(String)
-    Energie = Column(String)
-    PuissanceFiscale = Column(String)
-    datedelannonce = Column(String)
-    desc = Column(String)
-    Prix = Column(String)
+    date_annonce = Column(String)
+    categorie = Column(String)
+    titre = Column(String)
+    numero_telephone = Column(String)
+    prix = Column(String)
     description = Column(String)
-    Couleur = Column(String)
-    Carrosserie = Column(String)
-    etatdevehicule = Column(String)
-    Cylindree = Column(String)
-    Marque = Column(String)
-    Modele = Column(String)
+    link = Column(String)
+    type_de_transaction = Column(String)
+    superficie = Column(String)
+    salle_de_bain = Column(String)
+    chambre = Column(String)
+    images = relationship("TayaraPostImage", back_populates="property", cascade="all, delete-orphan")
 
+class TayaraPostImage(Base):
+    __tablename__ = 'TayaraPostImage'
+    id = Column(Integer, primary_key=True)
+    property_id = Column(Integer, ForeignKey('TayaraPostScrapping.id', ondelete='CASCADE'))
+    image_url = Column(String, nullable=False)
+
+    # Relationship back to property
+    property = relationship("TayaraPostScrapping", back_populates="images")
 
 class ScrappOccasionTayaraTn:
 
@@ -47,7 +53,7 @@ class ScrappOccasionTayaraTn:
         self.baseUrl = Config.baseUrlTayara
         self.nativeUrl = Config.nativeUrlTayara
         self.pageInitiale = 1
-        self.pageFinale = 2
+        self.pageFinale = 1
         
     def parsing_page_source(self, url):
         try:
@@ -70,16 +76,19 @@ class ScrappOccasionTayaraTn:
         liste = list(set([a.get('href') for a in links]))
         return [element for element in liste if '/item/' in element]
     
-    def click_show_phone(self,driver, timeout=10):
+    def click_show_phone(self, driver, timeout=10):
         try:
             btn = WebDriverWait(driver, timeout).until(
                 EC.element_to_be_clickable((
                     By.XPATH,
-                    "//button[@aria-label='Afficher numéro' or .//span[contains(text(),'Afficher le numéro')]]"
+                    "//button[.//span[contains(text(),'Afficher le numéro')]]"
                 ))
             )
+
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
             driver.execute_script("arguments[0].click();", btn)
             return True
+
         except TimeoutException:
             return False
     def extract_phone_after_click(self,driver, timeout=5):
@@ -92,52 +101,142 @@ class ScrappOccasionTayaraTn:
             return phone_el.text.strip()
         except TimeoutException:
             return None
-    def extract_data(self, soup):
-        data = {}
-        try: 
-            dateDeLannonce = soup.find('div', {'class': 'flex items-center space-x-2 mb-1'}).text.strip() if soup.find('div',{'class':'flex items-center space-x-2 mb-1'}) else None
-            categorie = soup.select_one("div.flex.items-center span").text.strip()
-            titre = soup.find('h1', {'class': 'text-gray-700 font-bold text-2xl font-arabic'}).text.strip() if soup.find('h1', {'class': 'text-gray-700 font-bold text-2xl font-arabic'}) else None
-            if self.click_show_phone(self.driver):
-                numeroTelephone = self.extract_phone_after_click(self.driver)
-            
-            mt4 = soup.find_all('div', {'class': 'mt-4'})
-            if len(mt4) > 1:
-                prix = mt4[1].find('data')['value']
-            else:
-                prix = None
-            ul = soup.find("ul", class_="grid gap-3 grid-cols-12")
+    def get_date(self, soup):
+        tag = soup.find('div', {'class': 'flex items-center space-x-2 mb-1'})
+        return tag.text.strip() if tag else None
+
+    def extract_category(self, driver, timeout=10):
+        try:
+            # Wait for the container div
+            container = WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//div[contains(@class,'items-center') and contains(@class,'space-x-2')]//span"
+                ))
+            )
+
+            category = container.text.strip()
+            return category
+
+        except TimeoutException:
+            return None
+        
+    def extract_all_images(self, driver, timeout=10):
+    
+        try:
+            # Wait until at least one image with mediaGateway appears
+            WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//img[contains(@src,'mediaGateway/resize-image')]"
+                ))
+            )
+
+            # Small wait to ensure all images are rendered
+            time.sleep(2)
+
+            images = driver.find_elements(
+                By.XPATH,
+                "//img[contains(@src,'mediaGateway/resize-image')]"
+            )
+
+            image_links = list({
+                img.get_attribute("src")
+                for img in images
+                if img.get_attribute("src")
+            })
+
+            return image_links
+
+        except TimeoutException:
+            return []
+    def get_categorie(self, soup):
+        tag = soup.select_one("div.flex.items-center span")
+        return tag.text.strip() if tag else None
+
+    def get_title(self, soup):
+        tag = soup.find('h1', {'class': 'text-gray-700 font-bold text-2xl font-arabic'})
+        return tag.text.strip() if tag else None
+
+    def get_phone(self, driver):
+        if self.click_show_phone(driver):
+            return self.extract_phone_after_click(driver)
+        return None
+
+    def get_price(self, soup):
+        mt4 = soup.find_all('div', {'class': 'mt-4'})
+        if len(mt4) > 1:
+            data_tag = mt4[1].find('data')
+            if data_tag:
+                return data_tag.get('value')  # fallback to text can be added if needed
+        return None
+    def get_specifications(self, soup):
+        specs = {}
+        ul = soup.find("ul", class_="grid gap-3 grid-cols-12")
+        if ul:
             for li in ul.find_all("li", recursive=False):
                 spans = li.select("span.flex.flex-col.py-1 > span")
                 if len(spans) >= 2:
                     label = spans[0].get_text(strip=True)
                     value = spans[1].get_text(strip=True)
-                    data[label] = value
-            h2 = soup.find("h2", string="Description")
-            if h2:
-                p = h2.find_next("p")
+                    specs[label] = value
+        return specs
 
-                description = "".join(
-                    t for t in p.find("span").contents
-                    if isinstance(t, str)
-                ).strip()
-            else:
-                description = None
-            # listCarac = soup.find_all('li', {'class': 'col-span-6 lg:col-span-3'})
-            # for div in listCarac:
-            #     spec_name = div.find('span',{'class':'text-gray-600/80 text-2xs md:text-xs lg:text-xs font-medium'}).text.strip() if div.find('span',{'class':'text-gray-600/80 text-2xs md:text-xs lg:text-xs font-medium'}) else None
-            #     spec_value = div.find('span',{'class':'text-gray-700/80 text-xs md:text-sm lg:text-sm font-semibold'}).text.strip() if div.find('span',{'class':'text-gray-700/80 text-xs md:text-sm lg:text-sm font-semibold'}) else None
-            #     data[spec_name] = spec_value
-            data['date de l"annonce'] = dateDeLannonce
-            data['desc'] = titre
-            data['prix'] = prix
-            data['description'] = description
-            data['categorie']= categorie
-            data['imamges_url']= self.extract_images(soup)
-            data['NumeroTelephone'] = numeroTelephone
+    def get_description(self, soup):
+        h2 = soup.find("h2", string="Description")
+        if h2:
+            p = h2.find_next("p")
+            if p:
+                span = p.find("span")
+                if span:
+                    return "".join(t for t in span.contents if isinstance(t, str)).strip()
+        return None
+    def extract_criteres(self, driver, timeout=10):
+        criteres = {}
+
+        try:
+            section = WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//h2[normalize-space()='Critères']/parent::*"
+                ))
+            )
+
+            items = section.find_elements(By.XPATH, ".//*[contains(@class,'flex')]")
+
+            for item in items:
+                texts = item.text.split("\n")
+                if len(texts) == 2:
+                    key = texts[0].strip()
+                    value = texts[1].strip()
+                    criteres[key] = value
+
+            return criteres
+
+        except:
+            return {}
+
+    def extract_data(self, soup,ImmobLink):
+        data = {}
+        try: 
+            data['dateDeLannonce'] = self.get_date(soup)
+            # data['categorie'] = self.get_categorie(soup)
+            data['categorie'] = self.extract_category(self.driver,timeout=10)
+            data['titre'] = self.get_title(soup)
+            data['numeroTelephone'] = self.get_phone(self.driver)
+            data['prix'] = self.get_price(soup)
+            data.update(self.get_specifications(soup))
+            data['description'] = self.get_description(soup)
+            data['Link'] = ImmobLink
+            criteres = self.extract_criteres(self.driver,timeout=10)
+            for key,value in criteres.items(): 
+                data[key]= value
+            list = self.extract_all_images(self.driver,timeout=10)
+            
         except AttributeError as e:
             print(f"An error occurred while extracting data: {e}")
-        return data
+        return data,list    
+    
     
     def extract_images(self,soup):
 
@@ -168,30 +267,42 @@ class ScrappOccasionTayaraTn:
         for i in range(PageInitiale, PageFinale+1):
         # for i in range(1, 2):
             listeDesImmobiliers.extend(self.extract_Immo_urls(self.baseUrl+str(i)))
+            print(listeDesImmobiliers)
+            listeDesImmobiliers = ['/item/appartements/tunis/el-manar-2/manar-2-appartement-s2-a-louer/698c684b1a74f8e704a1138b/', '/item/bureaux-et-plateaux/tunis/lac-2/bureau-en-4-espaces-100m-lac-2-ifcl2187/698c66321a74f8e704a11219/']
         try:
-            for index, voiture in enumerate(listeDesImmobiliers, start=1):
-                soup = self.parsing_page_source(self.nativeUrl + voiture)
-                data = self.extract_data(soup)
+            for index, immobilier in enumerate(listeDesImmobiliers, start=1):
+                ImmobLink = self.nativeUrl + immobilier
+                soup = self.parsing_page_source(ImmobLink)
+                data,ImageList = self.extract_data(soup,ImmobLink)
                 all_Data[f'dict{index}'] = data
         finally: 
             self.driver.quit()
-        return all_Data
+        return all_Data,ImageList
     
     def tayara_scrapper_runner(self):
-        data = self.scrape(self.pageInitiale, self.pageFinale)
+        data,ImageList = self.scrape(self.pageInitiale, self.pageFinale)
         standardize = ColumnsStandardiser()
         dataStandardized = standardize.column_standardize(data)
         Base.metadata.create_all(engine)
         # Créer une session
         Session = sessionmaker(bind=engine)
         session = Session()
-        for key, item in dataStandardized.items():
+        for idx, (key, item) in enumerate(dataStandardized.items()):
             tayarapostscrapping = TayaraPostScrapping(
-                Energie=item['Carburant'], Annee=item['Année'], Kilometrage=item['Kilométrage'],
-                PuissanceFiscale=item['Puissance fiscale'], Carrosserie=item['Type de carrosserie'],
-                BoiteVitesse=item['Boite'], datedelannonce=item['date de l"annonce'],Cylindree=item['Cylindrée'],
-                desc=item['desc'], description=item['description'], Prix=item['prix'], Marque=item['Marque'],
-                Modele=item['Modèle'],Couleur=item['Couleur du véhicule'],etatdevehicule=item['Etat du véhicule'])
+                    date_annonce=item['dateDeLannonce'],
+                    categorie=item['categorie'],
+                    titre=item['titre'],
+                    numero_telephone=item['numeroTelephone'],
+                    prix=item['prix'],
+                    description=item['description'],
+                    link = item['Link'],
+                    type_de_transaction = item['Type de transaction'],
+                    superficie = item['Superficie'],
+                    salle_de_bain = item['Salles de bains'],
+                    chambre = item['Chambres'])
+            if idx < len(ImageList):  # make sure there is a corresponding image list
+                for img_link in ImageList:
+                    tayarapostscrapping.images.append(TayaraPostImage(image_url=img_link))
             session.add(tayarapostscrapping)
         # Commit les transactions
         session.commit()
@@ -199,40 +310,13 @@ class ScrappOccasionTayaraTn:
         session.close()
 
     def tayara_columns_standardise(self, dataframe):
-        dataframe = dataframe.drop(columns={"Cylindree", 'datedelannonce', "description", "etatdevehicule"})
+        # dataframe = dataframe.drop(columns={"Cylindree", 'datedelannonce', "description", "etatdevehicule"})
         dataframe = dataframe.dropna(how='all')
         cln = cleaner()
         dataframe = cln.eliminate_unnamed_columns(dataframe)
-        dataframe = self.tayara_missing_marque_modele(dataframe)
+        # dataframe = self.tayara_missing_marque_modele(dataframe)
         return dataframe
-    
-    def tayara_missing_marque_modele(self, dataframe):
-        extraction = ExtractionMarqueModele()
-        dataframe['desc'] = dataframe['desc'].str.upper()
-        dataframe.dropna(subset=["desc"], inplace=True)
-        # dataframe.dropna(subset=["Modele", "desc", "Marque"], inplace=True)
-        ## Si la valeur du colonne marque est null: extraire le marque depuis la description (colonne desc)
-        maskMarque = dataframe['Marque'].isnull()
-        dataframe.loc[maskMarque, 'Marque'] = dataframe.loc[maskMarque, 'desc'].apply(lambda x: extraction.extraire_marque(x))
-        ## Si la valeur du colonne modele est null: extraire le modele depuis la description (colonne desc)
-        dataframe = dataframe.dropna(subset=['Marque'])
-        maskModele = dataframe['Modele'].isnull()
-        dataframe.loc[maskModele, 'Modele'] = dataframe.loc[maskModele, ['desc', 'Marque']].apply(lambda row: extraction.extraire_modele(row['desc'], row['Marque']), axis=1)
-        ## Si la valeur du colonne marque est Autres: extraire le marque depuis la description (colonne desc)
-        maskMarque = dataframe['Marque'] == 'Autres'
-        dataframe.loc[maskMarque, 'Marque'] = dataframe.loc[maskMarque, 'desc'].apply(lambda x: extraction.extraire_marque(x))
-        ## Si la valeur du colonne modele est Autres: extraire le modele depuis la description (colonne desc)
-        dataframe = dataframe.dropna(subset=['Marque'])
-        maskModele = dataframe['Modele'] == 'Autres'
-        dataframe.loc[maskModele, 'Modele'] = dataframe.loc[maskModele, ['desc', 'Marque']].apply(lambda row: extraction.extraire_modele(row['desc'], row['Marque']), axis=1)
-        modelesList = ["CLIO", "GOLF", "POLO"]
-        for modele in modelesList:
-            maskModele = dataframe['Modele'].str.upper() == modele
-            dataframe.loc[maskModele, 'Modele'] = dataframe.loc[maskModele, ['desc', 'Marque']].apply(
-                lambda row: extraction.extraire_modele(row['desc'], row['Marque']), axis=1)
-        dataframe = dataframe.drop(columns={"desc"})
-        return dataframe
-    
+       
     def run_whole_process(self):
         self.tayara_scrapper_runner()
         tayaraDf = pd.read_sql('TayaraPostScrapping', con=engine)
@@ -243,7 +327,4 @@ class ScrappOccasionTayaraTn:
 ##MAIN##
 if __name__ == "__main__":
     test = ScrappOccasionTayaraTn()
-    soup = test.parsing_page_source('https://www.tayara.tn/item/appartements/ariana/riadh-andalous/a-louer-s2-meubl-a-riadh-el-andalous/692dd57c265523b710ee1887/#item-caroussel-1')
-    data = test.extract_data(soup)
-    
-    print('data: ',data)
+    test.run_whole_process()
