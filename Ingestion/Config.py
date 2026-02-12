@@ -73,7 +73,7 @@ path_to_DataPourSimulateur = os.path.join(os.path.dirname(os.path.abspath(__file
 path_to_RequirementsFiles = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ML', 'RequirementsFiles')
 ##Web driver Config
 options = webdriver.ChromeOptions()
-# options.add_argument('--headless')  # Run in headless mode
+options.add_argument('--headless')  # Run in headless mode
 options.add_argument('--no-sandbox')
 options.add_argument('--disable-dev-shm-usage')
 options.add_argument('--disable-gpu')
